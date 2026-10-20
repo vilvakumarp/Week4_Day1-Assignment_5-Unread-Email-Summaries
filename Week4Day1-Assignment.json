@@ -1,0 +1,214 @@
+{
+  "name": "Week4Day1-Assignment",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -352,
+        -48
+      ],
+      "id": "f1de8803-fd81-4181-b09f-f60c1ee40572",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 5,
+        "filters": {
+          "readStatus": "unread"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -128,
+        -48
+      ],
+      "id": "9dbc4070-bd6b-4b59-b617-0da0ac1cbd5d",
+      "name": "Get many messages",
+      "webhookId": "a5d9f49c-b04a-464d-8cd9-2cf3bd7d85a0",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xSALBSR2fZPoAV8W",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Summarize this email in one concise sentence of no more than 20 words.\nReturn only a valid JSON object with these keys:\nfetchedAt, sender, subject, preview, receivedDate, summary.\n\nUse the provided values exactly for fetchedAt, sender, subject,\npreview, and receivedDate. Do not invent missing information.\nFor summary, describe the email in no more than 20 words.\nDo not include Markdown fences or any text outside the JSON object.\n\nFetched at: {{ $now }}\nFrom: {{ $json.From }}\nSubject: {{ $json.Subject }}\nPreview: {{ $json.snippet }}\nReceived date (Gmail internalDate): {{ $json.internalDate }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        96,
+        -48
+      ],
+      "id": "83fc4844-ac10-46bf-941a-c76649c28c73",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-nano-2025-04-14",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-nano-2025-04-14"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        32,
+        144
+      ],
+      "id": "96c23463-8937-47d2-809d-b5c1467e8b85",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "b59V88jxZsk4FIK1",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "gmail- unread mail summarizer"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.4,
+      "position": [
+        192,
+        176
+      ],
+      "id": "d4b30d43-2c88-4c79-a3c7-afc3e543f948",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst items = $input.all();\n\n// Clean text and escape HTML before inserting values into the email.\nconst clean = (value) => String(value ?? '').replace(/\\s+/g, ' ').trim();\n\nconst escapeHtml = (value) => clean(value).replace(/[&<>\"']/g, (char) => ({\n  '&': '&amp;',\n  '<': '&lt;',\n  '>': '&gt;',\n  '\"': '&quot;',\n  \"'\": '&#39;'\n})[char]);\n\n// Parse the JSON text returned by the AI Agent.\nconst emails = items.map((item) => {\n  let data = item.json.output;\n\n  if (typeof data === 'string') {\n    data = data.trim().replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/, '');\n    try {\n      data = JSON.parse(data);\n    } catch (error) {\n      throw new Error(`Could not parse AI output: ${error.message}`);\n    }\n  }\n\n  // Handle either parsed objects or already structured output.\n  if (!data || typeof data !== 'object') {\n    throw new Error('AI output is not a valid JSON object.');\n  }\n\n  // Format Gmail's millisecond timestamp as a readable date.\n  const rawDate = data.receivedDate;\n  const timestamp = Number(rawDate);\n  let receivedDate = clean(rawDate);\n\n  if (Number.isFinite(timestamp) && timestamp > 0) {\n    receivedDate = new Intl.DateTimeFormat('en-IN', {\n      timeZone: 'Asia/Kolkata',\n      day: '2-digit',\n      month: 'short',\n      year: 'numeric',\n      hour: '2-digit',\n      minute: '2-digit',\n      hour12: true\n    }).format(new Date(timestamp));\n  }\n\n  return {\n    fetchedAt: clean(data.fetchedAt),\n    receivedDate,\n    sender: clean(data.sender),\n    subject: clean(data.subject),\n    summary: clean(data.summary || data.preview || 'No summary')\n  };\n});\n\n// Build one HTML row per email.\nconst rows = emails.map((email) => `\n  <tr>\n    <td>${escapeHtml(email.receivedDate || 'Unknown')}</td>\n    <td>${escapeHtml(email.sender || 'Unknown')}</td>\n    <td>${escapeHtml(email.subject || '(No subject)')}</td>\n    <td>${escapeHtml(email.summary)}</td>\n  </tr>\n`).join('');\n\n// Construct a single HTML email containing all summaries.\nconst fetchedAt = emails[0]?.fetchedAt || 'Not available';\n\nconst emailBody = `\n  <h2>Your ${emails.length} Unread Email Summaries</h2>\n  <p>Fetched at: ${escapeHtml(fetchedAt)}</p>\n  <table border=\"1\" cellpadding=\"8\" cellspacing=\"0\"\n         style=\"border-collapse:collapse;font-family:Arial,sans-serif;\">\n    <thead>\n      <tr>\n        <th>Received Date</th>\n        <th>Sender</th>\n        <th>Subject</th>\n        <th>Summary</th>\n      </tr>\n    </thead>\n    <tbody>${rows}</tbody>\n  </table>\n`;\n\n// Return exactly one item so Gmail sends one consolidated email.\nreturn [{\n  json: {\n    emailCount: emails.length,\n    subject: `Your ${emails.length} Unread Emails`,\n    emailBody\n  }\n}];\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        -48
+      ],
+      "id": "bbabae7a-7e6b-48e7-b697-85c54d4c27ef",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "sendTo": "vilva@ymail.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.emailBody }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        704,
+        -48
+      ],
+      "id": "8991cbce-cb43-412f-a472-ebff49929eca",
+      "name": "Send a message",
+      "webhookId": "9a0c6bce-3e78-4790-a252-43337aab863a",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "xSALBSR2fZPoAV8W",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get many messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many messages": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "fa518416-cdbe-435d-b09a-fb5d52d1ab67",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7a37dbab793a1fe390dd18ae403ae3d05c186f6630d9785503bd83dbcb176f18"
+  },
+  "nodeGroups": [],
+  "id": "UrTYcCdSFp0GvG6a",
+  "tags": []
+}
